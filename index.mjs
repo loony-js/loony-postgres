@@ -1,4 +1,6 @@
+import loadEnv from "loony-dotenv";
 import PostgreSQLConnection from "./src/pgConnection.mjs";
+loadEnv();
 
 async function main() {
   console.log("=== PostgreSQL Wire Protocol Test ===");
