@@ -90,6 +90,7 @@ export class Client {
    * ```
    */
   async query(sql: string, params?: any[]): Promise<QueryResult> {
+    console.log(sql, params);
     return this.connection.query(sql, params) as Promise<QueryResult>;
   }
 

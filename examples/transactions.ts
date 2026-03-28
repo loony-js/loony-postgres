@@ -1,5 +1,6 @@
 import { DB_NAME, DB_PASSWORD, DB_USERNAME } from "../credentials.json";
 import { connect } from "../src/index";
+import process from "node:process";
 
 async function setupTestData() {
   const config = {

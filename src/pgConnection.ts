@@ -13,6 +13,7 @@ import {
   createBindPacket,
   createExecutePacket,
   createSyncPacket,
+  createDescribePacket,
 } from "./messageBuilder";
 import {
   parseNullTerminatedPairs,
@@ -577,6 +578,8 @@ class PostgreSQLConnection {
     this.socket?.write(createParsePacket("", sql, []));
     // Send BIND
     this.socket?.write(createBindPacket("", "", paramValues));
+    // Request row description for portal
+    this.socket?.write(createDescribePacket("P", ""));
     // Send EXECUTE
     this.socket?.write(createExecutePacket("", 0));
     // Send SYNC

@@ -224,6 +224,30 @@ export function createBindPacket(
 }
 
 /**
+ * Creates a DESCRIBE message for extended query protocol
+ * @param type - 'P' for portal, 'S' for prepared statement
+ * @param name - Name of the portal or statement
+ */
+export function createDescribePacket(type: string, name: string = ""): Buffer {
+  const nameBuffer = Buffer.from(name, "utf8");
+  let packet = Buffer.alloc(0);
+
+  packet = Buffer.concat([packet, Buffer.from([MESSAGE_TYPES.DESCRIBE])]);
+
+  const lengthPos = packet.length;
+  packet = Buffer.concat([packet, Buffer.alloc(4)]);
+
+  packet = Buffer.concat([packet, Buffer.from(type, "utf8")]);
+  packet = Buffer.concat([packet, nameBuffer, Buffer.from([0])]);
+
+  // Update length
+  const totalLength = packet.length - lengthPos;
+  packet.writeInt32BE(totalLength, lengthPos);
+
+  return packet;
+}
+
+/**
  * Creates an EXECUTE message for the extended query protocol
  * @param portalName - Name of the portal to execute
  * @param maxRows - Maximum number of rows to return (0 = all)

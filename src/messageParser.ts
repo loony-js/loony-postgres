@@ -111,6 +111,28 @@ export function parseDataRow(message: Buffer, fields: any) {
   let offset = 2;
   const row: any = {};
 
+  if (!fields || !Array.isArray(fields) || fields.length === 0) {
+    // No row description available: parse raw values in numeric fields.
+    for (let i = 0; i < fieldCount; i++) {
+      if (offset + 4 > message.length) break;
+      const length = message.readInt32BE(offset);
+      offset += 4;
+
+      if (length === -1) {
+        row[`column${i + 1}`] = null;
+      } else {
+        if (offset + length > message.length) break;
+        row[`column${i + 1}`] = message.toString(
+          "utf8",
+          offset,
+          offset + length,
+        );
+        offset += length;
+      }
+    }
+    return row;
+  }
+
   for (let i = 0; i < fieldCount && i < fields.length; i++) {
     if (offset + 4 > message.length) break;
 
