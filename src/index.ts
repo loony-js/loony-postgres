@@ -8,6 +8,7 @@
 import PostgreSQLConnection from "./pgConnection";
 import {
   ConnectionConfig,
+  PoolOptions,
   QueryResult,
   QueryOptions,
   FieldInfo,
@@ -340,9 +341,125 @@ export class Client {
   }
 }
 
+export class Pool {
+  private config: PoolOptions;
+  private max: number;
+  private idleTimeoutMillis: number;
+  private acquireTimeoutMillis: number;
+  private available: Client[] = [];
+  private inUse: Set<Client> = new Set();
+  private pending: Array<{
+    resolve: (client: Client) => void;
+    reject: (error: any) => void;
+    timer: ReturnType<typeof setTimeout> | null;
+  }> = [];
+  private closed = false;
+
+  constructor(config: PoolOptions) {
+    this.config = config;
+    this.max = config.max || 10;
+    this.idleTimeoutMillis = config.idleTimeoutMillis || 30000;
+    this.acquireTimeoutMillis = config.acquireTimeoutMillis || 30000;
+  }
+
+  async acquire(): Promise<Client> {
+    if (this.closed) {
+      throw new Error("Pool is closed");
+    }
+
+    const immediate = this.available.pop();
+    if (immediate) {
+      this.inUse.add(immediate);
+      return immediate;
+    }
+
+    if (this.inUse.size < this.max) {
+      const client = await connect(this.config);
+      this.inUse.add(client);
+      return client;
+    }
+
+    return new Promise<Client>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        const idx = this.pending.findIndex((item) => item.reject === reject);
+        if (idx >= 0) {
+          this.pending.splice(idx, 1);
+        }
+        reject(new Error("Pool acquire timeout"));
+      }, this.acquireTimeoutMillis);
+
+      this.pending.push({ resolve, reject, timer });
+    });
+  }
+
+  release(client: Client) {
+    if (this.closed) {
+      client.close();
+      return;
+    }
+
+    if (!this.inUse.has(client)) {
+      throw new Error("Attempt to release client that is not checked out");
+    }
+
+    this.inUse.delete(client);
+
+    if (this.pending.length > 0) {
+      const next = this.pending.shift()!;
+      if (next.timer) {
+        clearTimeout(next.timer);
+      }
+      this.inUse.add(client);
+      next.resolve(client);
+      return;
+    }
+
+    this.available.push(client);
+    setTimeout(() => {
+      const index = this.available.indexOf(client);
+      if (index !== -1 && this.available.length + this.inUse.size > this.max) {
+        this.available.splice(index, 1);
+        client.close();
+      }
+    }, this.idleTimeoutMillis);
+  }
+
+  async query(sql: string, params?: any[]): Promise<QueryResult> {
+    const client = await this.acquire();
+    try {
+      return await client.query(sql, params);
+    } finally {
+      this.release(client);
+    }
+  }
+
+  async close(): Promise<void> {
+    this.closed = true;
+
+    for (const pending of this.pending) {
+      if (pending.timer) {
+        clearTimeout(pending.timer);
+      }
+      pending.reject(new Error("Pool closed"));
+    }
+    this.pending = [];
+
+    for (const client of this.available) {
+      await client.close();
+    }
+    this.available = [];
+
+    for (const client of Array.from(this.inUse)) {
+      await client.close();
+    }
+    this.inUse.clear();
+  }
+}
+
 // Export all types for external use
 export type {
   ConnectionConfig,
+  PoolOptions,
   QueryResult,
   QueryOptions,
   FieldInfo,

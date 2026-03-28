@@ -42,6 +42,7 @@ class PostgreSQLConnection {
   state: string;
   readyForQuery: boolean;
   currentQuery: any;
+  queryQueue: Array<any>;
   MESSAGE_TYPES: typeof MESSAGE_TYPES;
   AUTH_TYPES: typeof AUTH_TYPES;
   scram: any;
@@ -68,6 +69,7 @@ class PostgreSQLConnection {
     this.state = "disconnected";
     this.readyForQuery = true;
     this.currentQuery = null;
+    this.queryQueue = [];
 
     this.MESSAGE_TYPES = MESSAGE_TYPES;
     this.AUTH_TYPES = AUTH_TYPES;
@@ -418,110 +420,126 @@ class PostgreSQLConnection {
     }
   }
 
-  // --- Query Method ---
+  // --- Query Method (with queue support) ---
 
-  async query(sql: string, params: string[] = []): Promise<QueryResult> {
-    if (!this.readyForQuery) {
-      throw new Error("Connection not ready for query");
+  async query(sql: string, params: any[] = []): Promise<QueryResult> {
+    return new Promise((resolve, reject) => {
+      this.queryQueue.push({ sql, params, resolve, reject });
+      this._processQueue();
+    });
+  }
+
+  _processQueue() {
+    if (
+      !this.readyForQuery ||
+      this.currentQuery ||
+      this.queryQueue.length === 0
+    ) {
+      return;
     }
 
+    const request = this.queryQueue.shift();
+    if (!request) {
+      return;
+    }
+
+    this.currentQuery = request;
     this.readyForQuery = false;
 
-    return new Promise((resolve, reject) => {
-      const results: any[] = [];
-      let fields:
-        | {
-            name: string;
-            tableOID: number;
-            columnAttrNum: number;
-            dataTypeOID: number;
-            dataTypeSize: number;
-            typeModifier: number;
-            format: number;
-          }[]
-        | null = null;
-      let commandCompleteMessage: Buffer<ArrayBufferLike> | null = null;
+    const results: any[] = [];
+    let fields:
+      | {
+          name: string;
+          tableOID: number;
+          columnAttrNum: number;
+          dataTypeOID: number;
+          dataTypeSize: number;
+          typeModifier: number;
+          format: number;
+        }[]
+      | null = null;
+    let commandCompleteMessage: Buffer<ArrayBufferLike> | null = null;
 
-      const handlers = {
-        onRowDescription: (message: Buffer<ArrayBufferLike>) =>
-          (fields = parseRowDescription(message)),
-        onDataRow: (message: Buffer<ArrayBufferLike>) =>
-          results.push(parseDataRow(message, fields)),
-        onCommandComplete: (message: any) => (commandCompleteMessage = message),
-        onEmptyQueryResponse: () =>
-          (commandCompleteMessage = Buffer.from("EMPTY\0", "utf8")),
-        onNoData: () => {},
-      };
+    const handlers = {
+      onParseComplete: () => {},
+      onBindComplete: () => {},
+      onRowDescription: (message: Buffer<ArrayBufferLike>) =>
+        (fields = parseRowDescription(message)),
+      onDataRow: (message: Buffer<ArrayBufferLike>) =>
+        results.push(parseDataRow(message, fields)),
+      onCommandComplete: (message: any) => (commandCompleteMessage = message),
+      onEmptyQueryResponse: () =>
+        (commandCompleteMessage = Buffer.from("EMPTY\0", "utf8")),
+      onNoData: () => {},
+    };
 
-      this.currentQuery = {
-        resolve: (data: any) => {
-          this.currentQuery = null;
-          resolve(data);
-        },
-        reject: (error: any) => {
-          this.currentQuery = null;
-          this.readyForQuery = true;
-          reject(error);
-        },
-        handlers: handlers,
-      };
+    this.currentQuery.handlers = handlers;
 
-      const timeout = setTimeout(() => {
-        if (this.currentQuery) {
-          this.currentQuery.reject(new Error("Query timeout"));
-        }
-      }, 30000);
-
-      const cleanup = () => {
-        clearTimeout(timeout);
-        this.socket?.removeListener("readyForQuery", onReadyForQuery);
-        this.socket?.removeListener("error", onError);
+    const timeout = setTimeout(() => {
+      if (this.currentQuery) {
+        this.currentQuery.reject(new Error("Query timeout"));
         this.currentQuery = null;
-      };
+        this.readyForQuery = true;
+        this._processQueue();
+      }
+    }, 30000);
 
-      this._sendQuery(sql, params);
+    const cleanup = () => {
+      clearTimeout(timeout);
+      this.socket?.removeListener("readyForQuery", onReadyForQuery);
+      this.socket?.removeListener("error", onError);
+      this.currentQuery = null;
+      this.readyForQuery = true;
+    };
 
-      const onReadyForQuery = (status: string) => {
-        if (!this.currentQuery) {
-          cleanup();
-          return;
-        }
+    this._sendQuery(request.sql, request.params);
 
-        let parsedCommand: any = {
-          command: "UNKNOWN",
-          rowCount: 0,
-          commandTag: "",
-          oid: null,
-        };
-
-        if (commandCompleteMessage) {
-          parsedCommand = parseCommandComplete(commandCompleteMessage);
-        } else if (status === "I") {
-          parsedCommand.command = "EMPTY";
-          parsedCommand.commandTag = "EMPTY";
-        }
-
-        const resolver = this.currentQuery.resolve;
+    const onReadyForQuery = (status: string) => {
+      if (!this.currentQuery) {
         cleanup();
+        this._processQueue();
+        return;
+      }
 
-        resolver({
-          rows: results,
-          fields: fields,
-          command: parsedCommand.command,
-          rowCount: parsedCommand.rowCount,
-          commandTag: parsedCommand.commandTag,
-          oid: parsedCommand.oid,
-        } as QueryResult);
+      let parsedCommand: any = {
+        command: "UNKNOWN",
+        rowCount: 0,
+        commandTag: "",
+        oid: null,
       };
 
-      const onError = (error: any) => {
-        cleanup();
-        reject(error);
-      };
+      if (commandCompleteMessage) {
+        parsedCommand = parseCommandComplete(commandCompleteMessage);
+      } else if (status === "I") {
+        parsedCommand.command = "EMPTY";
+        parsedCommand.commandTag = "EMPTY";
+      }
 
-      this.socket?.once("readyForQuery", onReadyForQuery);
-      this.socket?.once("error", onError);
-    });
+      const resolver = this.currentQuery.resolve;
+      cleanup();
+
+      resolver({
+        rows: results,
+        fields: fields,
+        command: parsedCommand.command,
+        rowCount: parsedCommand.rowCount,
+        commandTag: parsedCommand.commandTag,
+        oid: parsedCommand.oid,
+      } as QueryResult);
+
+      this._processQueue();
+    };
+
+    const onError = (error: any) => {
+      if (this.currentQuery) {
+        this.currentQuery.reject(error);
+      }
+      cleanup();
+      this._processQueue();
+    };
+
+    this.socket?.once("readyForQuery", onReadyForQuery);
+    this.socket?.once("error", onError);
   }
 
   _sendQuery(sql: string, params: any[] = []) {

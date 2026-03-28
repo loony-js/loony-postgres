@@ -57,6 +57,15 @@ export interface QueryOptions {
 }
 
 /**
+ * Pool options for connection pooling
+ */
+export interface PoolOptions extends ConnectionConfig {
+  max?: number; // maximum pooled connections (default: 10)
+  idleTimeoutMillis?: number; // close idle connections (default: 30000)
+  acquireTimeoutMillis?: number; // wait for available connection (default: 30000)
+}
+
+/**
  * Error response with PostgreSQL fields
  */
 export interface PostgreSQLError extends Error {
