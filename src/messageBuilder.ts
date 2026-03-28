@@ -110,6 +110,189 @@ export function createSimpleQueryPacket(sql: string): Buffer {
 }
 
 /**
+ * Creates a PARSE message for the extended query protocol
+ * @param statementName - Name of the prepared statement (empty string for unnamed)
+ * @param sql - SQL query string with $1, $2, etc. placeholders
+ * @param paramTypes - Array of parameter type OIDs (0 = infer from context)
+ */
+export function createParsePacket(
+  statementName: string,
+  sql: string,
+  paramTypes: number[] = [],
+): Buffer {
+  const statementNameBuffer = Buffer.from(statementName, "utf8");
+  const queryBuffer = Buffer.from(sql, "utf8");
+  let packet = Buffer.alloc(0);
+
+  packet = Buffer.concat([packet, Buffer.from([MESSAGE_TYPES.PARSE])]);
+
+  const lengthPos = packet.length;
+  packet = Buffer.concat([packet, Buffer.alloc(4)]);
+
+  // Statement name (null-terminated)
+  packet = Buffer.concat([packet, statementNameBuffer, Buffer.from([0])]);
+
+  // Query string (null-terminated)
+  packet = Buffer.concat([packet, queryBuffer, Buffer.from([0])]);
+
+  // Number of parameter types
+  const paramCountBuffer = Buffer.alloc(2);
+  paramCountBuffer.writeInt16BE(paramTypes.length, 0);
+  packet = Buffer.concat([packet, paramCountBuffer]);
+
+  // Parameter types (int32 each)
+  for (const oid of paramTypes) {
+    const oidBuffer = Buffer.alloc(4);
+    oidBuffer.writeInt32BE(oid, 0);
+    packet = Buffer.concat([packet, oidBuffer]);
+  }
+
+  // Update length
+  const totalLength = packet.length - lengthPos;
+  packet.writeInt32BE(totalLength, lengthPos);
+
+  return packet;
+}
+
+/**
+ * Creates a BIND message for the extended query protocol
+ * @param portalName - Name of the portal (empty string for unnamed)
+ * @param statementName - Name of the prepared statement
+ * @param paramValues - Array of parameter values (null for NULL values)
+ */
+export function createBindPacket(
+  portalName: string,
+  statementName: string,
+  paramValues: (string | null | Buffer)[] = [],
+): Buffer {
+  const portalNameBuffer = Buffer.from(portalName, "utf8");
+  const statementNameBuffer = Buffer.from(statementName, "utf8");
+  let packet = Buffer.alloc(0);
+
+  packet = Buffer.concat([packet, Buffer.from([MESSAGE_TYPES.BIND])]);
+
+  const lengthPos = packet.length;
+  packet = Buffer.concat([packet, Buffer.alloc(4)]);
+
+  // Portal name (null-terminated)
+  packet = Buffer.concat([packet, portalNameBuffer, Buffer.from([0])]);
+
+  // Statement name (null-terminated)
+  packet = Buffer.concat([packet, statementNameBuffer, Buffer.from([0])]);
+
+  // Number of parameter format codes (0 = all text format)
+  const formatCountBuffer = Buffer.alloc(2);
+  formatCountBuffer.writeInt16BE(0, 0);
+  packet = Buffer.concat([packet, formatCountBuffer]);
+
+  // Number of parameter values
+  const paramCountBuffer = Buffer.alloc(2);
+  paramCountBuffer.writeInt16BE(paramValues.length, 0);
+  packet = Buffer.concat([packet, paramCountBuffer]);
+
+  // Parameter values
+  for (const value of paramValues) {
+    let valueBuffer: Buffer;
+
+    if (value === null) {
+      // NULL value: length = -1
+      const lengthBuffer = Buffer.alloc(4);
+      lengthBuffer.writeInt32BE(-1, 0);
+      packet = Buffer.concat([packet, lengthBuffer]);
+    } else if (typeof value === "string") {
+      valueBuffer = Buffer.from(value, "utf8");
+      const lengthBuffer = Buffer.alloc(4);
+      lengthBuffer.writeInt32BE(valueBuffer.length, 0);
+      packet = Buffer.concat([packet, lengthBuffer, valueBuffer]);
+    } else if (Buffer.isBuffer(value)) {
+      const lengthBuffer = Buffer.alloc(4);
+      lengthBuffer.writeInt32BE(value.length, 0);
+      packet = Buffer.concat([packet, lengthBuffer, value]);
+    }
+  }
+
+  // Result format codes (0 = all text format)
+  const resultFormatCountBuffer = Buffer.alloc(2);
+  resultFormatCountBuffer.writeInt16BE(0, 0);
+  packet = Buffer.concat([packet, resultFormatCountBuffer]);
+
+  // Update length
+  const totalLength = packet.length - lengthPos;
+  packet.writeInt32BE(totalLength, lengthPos);
+
+  return packet;
+}
+
+/**
+ * Creates an EXECUTE message for the extended query protocol
+ * @param portalName - Name of the portal to execute
+ * @param maxRows - Maximum number of rows to return (0 = all)
+ */
+export function createExecutePacket(
+  portalName: string = "",
+  maxRows: number = 0,
+): Buffer {
+  const portalNameBuffer = Buffer.from(portalName, "utf8");
+  let packet = Buffer.alloc(0);
+
+  packet = Buffer.concat([packet, Buffer.from([MESSAGE_TYPES.EXECUTE])]);
+
+  const lengthPos = packet.length;
+  packet = Buffer.concat([packet, Buffer.alloc(4)]);
+
+  // Portal name (null-terminated)
+  packet = Buffer.concat([packet, portalNameBuffer, Buffer.from([0])]);
+
+  // Maximum rows
+  const maxRowsBuffer = Buffer.alloc(4);
+  maxRowsBuffer.writeInt32BE(maxRows, 0);
+  packet = Buffer.concat([packet, maxRowsBuffer]);
+
+  // Update length
+  const totalLength = packet.length - lengthPos;
+  packet.writeInt32BE(totalLength, lengthPos);
+
+  return packet;
+}
+
+/**
+ * Creates a SYNC message to synchronize with the server
+ */
+export function createSyncPacket(): Buffer {
+  const packet = Buffer.alloc(5);
+  packet[0] = MESSAGE_TYPES.SYNC;
+  packet.writeInt32BE(4, 1);
+  return packet;
+}
+
+/**
+ * Creates a CLOSE message for closing a portal or statement
+ * @param type - 'S' for statement, 'P' for portal
+ * @param name - Name of the statement/portal
+ */
+export function createClosePacket(type: string, name: string): Buffer {
+  const nameBuffer = Buffer.from(name, "utf8");
+  let packet = Buffer.alloc(0);
+
+  packet = Buffer.concat([packet, Buffer.from([MESSAGE_TYPES.CLOSE])]);
+
+  const lengthPos = packet.length;
+  packet = Buffer.concat([packet, Buffer.alloc(4)]);
+
+  // Type (S or P)
+  packet = Buffer.concat([packet, Buffer.from(type, "utf8")]);
+
+  // Name (null-terminated)
+  packet = Buffer.concat([packet, nameBuffer, Buffer.from([0])]);
+
+  // Update length
+  const totalLength = packet.length - lengthPos;
+  packet.writeInt32BE(totalLength, lengthPos);
+
+  return packet;
+}
+
+/**
  * Creates the initial connection startup packet (no type byte).
  * @param {object} config - Connection configuration.
  * @returns {Buffer} The complete startup message packet.

@@ -1,6 +1,7 @@
 import loadEnv from "loony-dotenv";
-import PostgreSQLConnection from "./pgConnection";
+// import PostgreSQLConnection from "./pgConnection";
 // const PostgreSQLConnection = require("./dist/pgConnection.js");
+import { connect } from "./index";
 loadEnv();
 
 async function main() {
@@ -20,11 +21,9 @@ async function main() {
     password: config.password ? "[HIDDEN]" : "[EMPTY]",
   });
 
-  const client = new PostgreSQLConnection(config);
-
   try {
     console.log("\n1. Connecting to database...");
-    await client.connect();
+    const client = await connect(config);
     console.log("✓ Connected successfully!");
 
     console.log("\n2. Testing simple query...");

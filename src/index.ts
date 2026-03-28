@@ -50,6 +50,8 @@ export async function connect(config: ConnectionConfig): Promise<Client> {
  */
 export class Client {
   private connection: PostgreSQLConnection;
+  private transactionDepth: number = 0;
+  private inTransaction: boolean = false;
 
   constructor(connection: PostgreSQLConnection) {
     this.connection = connection;
@@ -59,15 +61,31 @@ export class Client {
    * Execute a SQL query and return results
    *
    * @param sql - SQL query string
-   * @param params - Query parameters (for future parameterized query support)
+   * @param params - Query parameters (automatically prevents SQL injection)
    * @returns Promise<QueryResult> - Query result with rows and metadata
    *
    * @example
    * ```typescript
+   * // Simple query
    * const result = await client.query("SELECT * FROM users");
-   * console.log(result.rows);        // Array of row objects
-   * console.log(result.rowCount);    // Number of rows
-   * console.log(result.fields);      // Column metadata
+   *
+   * // Parameterized query (safe from SQL injection)
+   * const user = await client.query(
+   *   "SELECT * FROM users WHERE id = $1",
+   *   [123]
+   * );
+   *
+   * // Multiple parameters
+   * const rows = await client.query(
+   *   "SELECT * FROM users WHERE age > $1 AND city = $2",
+   *   [18, "New York"]
+   * );
+   *
+   * // NULL values
+   * const result = await client.query(
+   *   "UPDATE users SET bio = $1 WHERE id = $2",
+   *   [null, 123]  // Sets bio to NULL
+   * );
    * ```
    */
   async query(sql: string, params?: any[]): Promise<QueryResult> {
@@ -113,17 +131,181 @@ export class Client {
    * ```
    */
   async transaction<T>(callback: (client: this) => Promise<T>): Promise<T> {
+    if (this.transactionDepth === 0) {
+      // Start new transaction
+      await this.begin();
+    } else {
+      // Create savepoint for nested transaction
+      await this.savepoint(`sp_${this.transactionDepth}`);
+    }
+
+    this.transactionDepth++;
+
     try {
-      await this.connection.query("BEGIN", []);
       const result = await callback(this);
-      await this.connection.query("COMMIT", []);
+      this.transactionDepth--;
+
+      if (this.transactionDepth === 0) {
+        await this.commit();
+      } else {
+        await this.releaseSavepoint(`sp_${this.transactionDepth}`);
+      }
+
       return result;
     } catch (error) {
-      await this.connection.query("ROLLBACK", []).catch(() => {
-        // Ignore rollback errors
-      });
+      this.transactionDepth--;
+
+      if (this.transactionDepth === 0) {
+        await this.rollback().catch(() => {
+          // Ignore rollback errors
+        });
+      } else {
+        await this.rollbackToSavepoint(`sp_${this.transactionDepth}`).catch(
+          () => {
+            // Ignore rollback errors
+          },
+        );
+      }
+
       throw error;
     }
+  }
+
+  /**
+   * Start a new transaction
+   *
+   * @example
+   * ```typescript
+   * await client.begin();
+   * try {
+   *   await client.query("INSERT INTO users (name) VALUES ('Alice')");
+   *   await client.commit();
+   * } catch (error) {
+   *   await client.rollback();
+   * }
+   * ```
+   */
+  async begin(): Promise<QueryResult> {
+    if (this.inTransaction && this.transactionDepth === 0) {
+      throw new Error(
+        "Transaction already in progress. Use nested transactions or savepoints.",
+      );
+    }
+    const result = (await this.connection.query("BEGIN", [])) as QueryResult;
+    if (this.transactionDepth === 0) {
+      this.inTransaction = true;
+    }
+    return result;
+  }
+
+  /**
+   * Commit the current transaction
+   *
+   * @example
+   * ```typescript
+   * await client.query("INSERT INTO users (name) VALUES ('Alice')");
+   * await client.commit();
+   * ```
+   */
+  async commit(): Promise<QueryResult> {
+    if (!this.inTransaction) {
+      throw new Error("No active transaction to commit");
+    }
+    const result = (await this.connection.query("COMMIT", [])) as QueryResult;
+    if (this.transactionDepth === 0) {
+      this.inTransaction = false;
+    }
+    return result;
+  }
+
+  /**
+   * Rollback the current transaction
+   *
+   * @example
+   * ```typescript
+   * try {
+   *   await client.query("INSERT INTO users (name) VALUES ('Alice')");
+   *   throw new Error("Oops!");
+   * } catch (error) {
+   *   await client.rollback();
+   * }
+   * ```
+   */
+  async rollback(): Promise<QueryResult> {
+    if (!this.inTransaction) {
+      throw new Error("No active transaction to rollback");
+    }
+    const result = (await this.connection.query("ROLLBACK", [])) as QueryResult;
+    if (this.transactionDepth === 0) {
+      this.inTransaction = false;
+    }
+    return result;
+  }
+
+  /**
+   * Create a savepoint within the current transaction
+   *
+   * @param name - Savepoint name
+   * @example
+   * ```typescript
+   * await client.begin();
+   * await client.savepoint("my_savepoint");
+   * try {
+   *   await client.query("INSERT INTO users (name) VALUES ('Alice')");
+   * } catch (error) {
+   *   await client.rollbackToSavepoint("my_savepoint");
+   * }
+   * await client.commit();
+   * ```
+   */
+  async savepoint(name: string): Promise<QueryResult> {
+    if (!this.inTransaction) {
+      throw new Error("Savepoints require an active transaction");
+    }
+    return (await this.connection.query(
+      `SAVEPOINT ${name}`,
+      [],
+    )) as QueryResult;
+  }
+
+  /**
+   * Rollback to a specific savepoint
+   *
+   * @param name - Savepoint name
+   */
+  async rollbackToSavepoint(name: string): Promise<QueryResult> {
+    if (!this.inTransaction) {
+      throw new Error("No active transaction");
+    }
+    return (await this.connection.query(
+      `ROLLBACK TO SAVEPOINT ${name}`,
+      [],
+    )) as QueryResult;
+  }
+
+  /**
+   * Release a savepoint
+   *
+   * @param name - Savepoint name
+   */
+  async releaseSavepoint(name: string): Promise<QueryResult> {
+    if (!this.inTransaction) {
+      throw new Error("No active transaction");
+    }
+    return (await this.connection.query(
+      `RELEASE SAVEPOINT ${name}`,
+      [],
+    )) as QueryResult;
+  }
+
+  /**
+   * Get current transaction state
+   */
+  getTransactionState() {
+    return {
+      inTransaction: this.inTransaction,
+      depth: this.transactionDepth,
+    };
   }
 
   /**
@@ -178,6 +360,11 @@ export {
   createSimpleQueryPacket,
   createStartupPacket,
   createSASLInitialResponsePacket,
+  createParsePacket,
+  createBindPacket,
+  createExecutePacket,
+  createSyncPacket,
+  createClosePacket,
 } from "./messageBuilder";
 
 export {

@@ -9,6 +9,10 @@ import {
   createPasswordPacket,
   createTerminationPacket,
   createSASLInitialResponsePacket,
+  createParsePacket,
+  createBindPacket,
+  createExecutePacket,
+  createSyncPacket,
 } from "./messageBuilder";
 import {
   parseNullTerminatedPairs,
@@ -221,6 +225,8 @@ class PostgreSQLConnection {
       case this.MESSAGE_TYPES.COMMAND_COMPLETE:
       case this.MESSAGE_TYPES.EMPTY_QUERY_RESPONSE:
       case this.MESSAGE_TYPES.NO_DATA:
+      case this.MESSAGE_TYPES.PARSE_COMPLETE:
+      case this.MESSAGE_TYPES.BIND_COMPLETE:
         if (this.currentQuery && this.currentQuery.handlers) {
           this._handleQueryResponse(messageType, messageBody);
         }
@@ -388,6 +394,12 @@ class PostgreSQLConnection {
     const handlers = this.currentQuery.handlers;
 
     switch (messageType) {
+      case this.MESSAGE_TYPES.PARSE_COMPLETE:
+        handlers.onParseComplete && handlers.onParseComplete();
+        break;
+      case this.MESSAGE_TYPES.BIND_COMPLETE:
+        handlers.onBindComplete && handlers.onBindComplete();
+        break;
       case this.MESSAGE_TYPES.ROW_DESCRIPTION:
         handlers.onRowDescription && handlers.onRowDescription(message);
         break;
@@ -512,13 +524,45 @@ class PostgreSQLConnection {
     });
   }
 
-  _sendQuery(sql: string, params: string | any[]) {
+  _sendQuery(sql: string, params: any[] = []) {
     if (params && params.length > 0) {
-      console.warn(
-        "Extended query not fully implemented, falling back to simple query (without parameter safety).",
-      );
+      // Use extended query protocol for parameterized queries
+      this._sendExtendedQuery(sql, params);
+    } else {
+      // Use simple query protocol for queries without parameters
+      this.socket?.write(createSimpleQueryPacket(sql));
     }
-    this.socket?.write(createSimpleQueryPacket(sql));
+  }
+
+  _sendExtendedQuery(sql: string, params: any[]) {
+    // Convert parameter values to strings/nulls for text format
+    const paramValues: (string | null)[] = params.map((param) => {
+      if (param === null || param === undefined) {
+        return null;
+      }
+      if (typeof param === "string") {
+        return param;
+      }
+      if (typeof param === "boolean") {
+        return param ? "true" : "false";
+      }
+      if (typeof param === "number") {
+        return param.toString();
+      }
+      if (typeof param === "object") {
+        return JSON.stringify(param);
+      }
+      return String(param);
+    });
+
+    // Send PARSE
+    this.socket?.write(createParsePacket("", sql, []));
+    // Send BIND
+    this.socket?.write(createBindPacket("", "", paramValues));
+    // Send EXECUTE
+    this.socket?.write(createExecutePacket("", 0));
+    // Send SYNC
+    this.socket?.write(createSyncPacket());
   }
 }
 
