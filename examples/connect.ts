@@ -1,12 +1,13 @@
+import { DB_NAME, DB_PASSWORD, DB_USERNAME } from "../credentials.json";
 import { connect } from "../src/index";
 
 async function main() {
   const client = await connect({
     host: "localhost",
     port: 5432,
-    database: "mydb",
-    user: "postgres",
-    password: "postgres",
+    database: DB_NAME,
+    user: DB_USERNAME,
+    password: DB_PASSWORD,
   });
 
   try {

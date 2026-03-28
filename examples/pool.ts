@@ -1,3 +1,4 @@
+import { DB_NAME, DB_PASSWORD, DB_USERNAME } from "../credentials.json";
 import { Pool, connect } from "../src/index";
 
 async function runClientExample() {
@@ -6,23 +7,13 @@ async function runClientExample() {
   const client = await connect({
     host: "localhost",
     port: 5432,
-    user: "postgres",
-    password: "postgres",
-    database: "mydb",
+    database: DB_NAME,
+    user: DB_USERNAME,
+    password: DB_PASSWORD,
   });
 
   try {
     console.log("Connected via Client");
-
-    const create = await client.query(`
-      CREATE TABLE IF NOT EXISTS users (
-        id SERIAL PRIMARY KEY,
-        name TEXT NOT NULL,
-        email TEXT UNIQUE NOT NULL,
-        created_at TIMESTAMP DEFAULT NOW()
-      )
-    `);
-    console.log("Create table result:", create.commandTag);
 
     await client.query("INSERT INTO users (name, email) VALUES ($1, $2)", [
       "Alice",
@@ -60,9 +51,9 @@ async function runPoolExample() {
   const pool = new Pool({
     host: "localhost",
     port: 5432,
-    user: "postgres",
-    password: "postgres",
-    database: "mydb",
+    user: DB_USERNAME,
+    password: DB_PASSWORD,
+    database: DB_NAME,
     max: 5,
     idleTimeoutMillis: 30000,
     acquireTimeoutMillis: 15000,
