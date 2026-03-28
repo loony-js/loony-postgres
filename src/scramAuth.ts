@@ -1,6 +1,6 @@
 // src/scramAuth.js
 import crypto from "crypto";
-import { parseSCRAMParams } from "./messageParser.mjs";
+import { parseSCRAMParams } from "./messageParser";
 
 /**
  * Generates the client first message and stores necessary SCRAM state.
@@ -8,7 +8,7 @@ import { parseSCRAMParams } from "./messageParser.mjs";
  * @param {string} user - The username.
  * @returns {object} The updated SCRAM state.
  */
-export function startSCRAMSHA256(scramState, user) {
+export function startSCRAMSHA256(scramState: any, user: string) {
   // Generate client nonce (at least 18 bytes recommended)
   scramState.clientNonce = crypto.randomBytes(18).toString("base64");
 
@@ -34,7 +34,11 @@ export function startSCRAMSHA256(scramState, user) {
  * @param {string} password - The user's password.
  * @returns {{state: object, error: Error|null}} The updated state or an error.
  */
-export function processSASLContinue(scramState, message, password) {
+export function processSASLContinue(
+  scramState: any,
+  message: Buffer,
+  password: string,
+) {
   const serverFirstMessage = message.toString("utf8");
   scramState.serverFirstMessage = serverFirstMessage;
 
@@ -67,7 +71,7 @@ export function processSASLContinue(scramState, message, password) {
     scramState.salt,
     scramState.iterations,
     32, // 32 bytes = 256 bits
-    "sha256"
+    "sha256",
   );
 
   // 2. ClientKey and StoredKey
@@ -102,7 +106,7 @@ export function processSASLContinue(scramState, message, password) {
 
   // 6. Full Client Final Message
   scramState.clientFinalMessage = `${clientFinalMessageWithoutProof},p=${clientProof.toString(
-    "base64"
+    "base64",
   )}`;
 
   return { state: scramState, error: null };
@@ -114,7 +118,7 @@ export function processSASLContinue(scramState, message, password) {
  * @param {Buffer} message - The server final message buffer.
  * @returns {Error|null} An error if verification fails, otherwise null.
  */
-export function processSASLFinal(scramState, message) {
+export function processSASLFinal(scramState: any, message: Buffer) {
   const serverFinalMessage = message.toString("utf8");
   scramState.serverFinalMessage = serverFinalMessage;
 
@@ -152,7 +156,7 @@ export function processSASLFinal(scramState, message) {
  * @param {string} name - The username.
  * @returns {string} The escaped name.
  */
-function saslName(name) {
+function saslName(name: string) {
   // Simple SASL name escaping (replace = with =3D and , with =2C)
   return name.replace(/=/g, "=3D").replace(/,/g, "=2C");
 }
@@ -162,7 +166,7 @@ function saslName(name) {
  * @param {string} password - The password.
  * @returns {string} The normalized password.
  */
-function normalizePassword(password) {
+function normalizePassword(password: string) {
   // Simplified SASLprep - in production, use a proper SASLprep library
   return password.normalize("NFKC");
 }

@@ -1,15 +1,32 @@
 {
   "name": "loony-pg",
   "version": "0.1.0",
-  "main": "index.js",
-  "type": "module",
+  "main": "./dist/index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "build": "rm -rf dist && tsc",
+    "start": "node dist/usage.js",
+    "inspect": "node dist/inspect.js",
+    "test": "vitest run",
+    "test:watch": "vitest"
   },
   "author": "",
   "license": "ISC",
   "description": "",
   "dependencies": {
-    "loony-dotenv": "^0.1.0"
+    "loony-dotenv": "^0.1.0",
+    "commander": "^14.0.3",
+    "crypto": "^1.0.1",
+    "diff": "^8.0.3",
+    "dotenv": "^17.3.1",
+    "ignore": "^5.2.0",
+    "node-fetch": "^3.3.2"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.6",
+    "@types/multer": "^2.0.0",
+    "@types/node": "^25.2.1",
+    "@types/pg": "^8.16.0",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.9.3"
   }
 }

@@ -6,7 +6,7 @@
  * @param {number} offset - The starting offset.
  * @returns {string} The decoded string.
  */
-export function readCString(buffer, offset) {
+export function readCString(buffer: Buffer, offset: number) {
   let end = offset;
   while (end < buffer.length && buffer[end] !== 0) {
     end++;
@@ -19,8 +19,8 @@ export function readCString(buffer, offset) {
  * @param {Buffer} buffer - The message body.
  * @returns {object} An object containing the parsed key-value pairs.
  */
-export function parseNullTerminatedPairs(buffer) {
-  const result = {};
+export function parseNullTerminatedPairs(buffer: Buffer) {
+  const result: any = {};
   let offset = 0;
 
   while (offset < buffer.length && buffer[offset] !== 0) {
@@ -43,9 +43,9 @@ export function parseNullTerminatedPairs(buffer) {
  * @param {Buffer} message - The message body (a single C-string).
  * @returns {object} Parsed command details.
  */
-export function parseCommandComplete(message) {
+export function parseCommandComplete(message: Buffer) {
   const commandTag = readCString(message, 0);
-  const parts = commandTag.split(" ");
+  const parts: any = commandTag.split(" ");
 
   let rowCount = 0;
   let oid = null;
@@ -72,7 +72,7 @@ export function parseCommandComplete(message) {
  * @param {Buffer} message - The message body.
  * @returns {Array<object>} An array of field objects.
  */
-export function parseRowDescription(message) {
+export function parseRowDescription(message: Buffer) {
   const fieldCount = message.readInt16BE(0);
   let offset = 2;
   const fields = [];
@@ -106,10 +106,10 @@ export function parseRowDescription(message) {
  * @param {Array<object>} fields - The field definitions from RowDescription.
  * @returns {object} A single row object.
  */
-export function parseDataRow(message, fields) {
+export function parseDataRow(message: Buffer, fields: any) {
   const fieldCount = message.readInt16BE(0);
   let offset = 2;
-  const row = {};
+  const row: any = {};
 
   for (let i = 0; i < fieldCount && i < fields.length; i++) {
     if (offset + 4 > message.length) break;
@@ -137,8 +137,8 @@ export function parseDataRow(message, fields) {
  * @param {string} str - The SCRAM parameters string.
  * @returns {object} The parsed parameters.
  */
-export function parseSCRAMParams(str) {
-  const params = {};
+export function parseSCRAMParams(str: string) {
+  const params: any = {};
   const pairs = str.split(",");
 
   for (const pair of pairs) {

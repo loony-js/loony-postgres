@@ -2,29 +2,52 @@
 
 import net from "net";
 import crypto from "crypto";
-import { MESSAGE_TYPES, AUTH_TYPES } from "./constants.mjs";
+import { MESSAGE_TYPES, AUTH_TYPES } from "./constants";
 import {
   createStartupPacket,
   createSimpleQueryPacket,
   createPasswordPacket,
   createTerminationPacket,
   createSASLInitialResponsePacket,
-} from "./messageBuilder.mjs";
+} from "./messageBuilder";
 import {
   parseNullTerminatedPairs,
   readCString,
   parseCommandComplete,
   parseRowDescription,
   parseDataRow,
-} from "./messageParser.mjs";
+} from "./messageParser";
 import {
   startSCRAMSHA256,
   processSASLContinue,
   processSASLFinal,
-} from "./scramAuth.mjs";
+} from "./scramAuth";
 
 class PostgreSQLConnection {
-  constructor(config) {
+  host: string;
+  port: number;
+  database: string;
+  user: string;
+  password: string;
+  socket: net.Socket | null;
+  buffer: Buffer;
+  processId: number;
+  secretKey: number;
+  encoding: string;
+  state: string;
+  readyForQuery: boolean;
+  currentQuery: any;
+  MESSAGE_TYPES: typeof MESSAGE_TYPES;
+  AUTH_TYPES: typeof AUTH_TYPES;
+  scram: any;
+
+  constructor(config: {
+    host: string;
+    port: number;
+    database: string;
+    user: string;
+    password: string;
+  }) {
     this.host = config.host || "localhost";
     this.port = config.port || 5432;
     this.database = config.database || "postgres";
@@ -75,18 +98,18 @@ class PostgreSQLConnection {
           () => {
             this.state = "connected";
             console.log(
-              "TCP connection established, sending startup packet..."
+              "TCP connection established, sending startup packet...",
             );
             this._sendStartupMessage();
-          }
+          },
         );
 
-        this.socket.on("data", (data) => {
+        this.socket?.on("data", (data: any) => {
           this.buffer = Buffer.concat([this.buffer, data]);
           this._processIncomingData();
         });
 
-        this.socket.on("error", (err) => {
+        this.socket?.on("error", (err) => {
           console.error("Socket error:", err);
           this.state = "error";
           if (this.state !== "connected") {
@@ -94,27 +117,27 @@ class PostgreSQLConnection {
           }
         });
 
-        this.socket.on("close", () => {
+        this.socket?.on("close", () => {
           this.state = "disconnected";
         });
 
-        this.socket.on("end", () => {
+        this.socket?.on("end", () => {
           this.state = "disconnected";
         });
 
-        const onReadyForQuery = (status) => {
+        const onReadyForQuery = (status: any) => {
           this.readyForQuery = true;
-          this.socket.removeListener("authenticationError", onAuthError);
+          this.socket?.removeListener("authenticationError", onAuthError);
           resolve(this);
         };
 
-        const onAuthError = (error) => {
-          this.socket.removeListener("readyForQuery", onReadyForQuery);
+        const onAuthError = (error: any) => {
+          this.socket?.removeListener("readyForQuery", onReadyForQuery);
           reject(error);
         };
 
-        this.socket.once("readyForQuery", onReadyForQuery);
-        this.socket.once("authenticationError", onAuthError);
+        this.socket?.once("readyForQuery", onReadyForQuery);
+        this.socket?.once("authenticationError", onAuthError);
       } catch (error) {
         reject(error);
       }
@@ -122,11 +145,11 @@ class PostgreSQLConnection {
   }
 
   async close() {
-    return new Promise((resolve) => {
+    return new Promise<void>((resolve) => {
       if (this.socket && this.state !== "disconnected") {
-        this.socket.write(createTerminationPacket());
-        this.socket.end();
-        this.socket.once("close", () => {
+        this.socket?.write(createTerminationPacket());
+        this.socket?.end();
+        this.socket?.once("close", () => {
           this.state = "disconnected";
           resolve();
         });
@@ -140,7 +163,7 @@ class PostgreSQLConnection {
 
   _sendStartupMessage() {
     const startupPacket = createStartupPacket(this);
-    this.socket.write(startupPacket);
+    this.socket?.write(startupPacket);
   }
 
   _processIncomingData() {
@@ -166,7 +189,7 @@ class PostgreSQLConnection {
     }
   }
 
-  _processMessage(message) {
+  _processMessage(message: Buffer<ArrayBuffer>) {
     if (message.length < 5) return;
 
     const messageType = message[0];
@@ -209,7 +232,7 @@ class PostgreSQLConnection {
 
   // --- Authentication Handlers (now includes SCRAM logic from scramAuth.js) ---
 
-  _handleAuthenticationMessage(message) {
+  _handleAuthenticationMessage(message: Buffer) {
     if (message.length < 4) return;
 
     const authType = message.readInt32BE(0);
@@ -217,10 +240,10 @@ class PostgreSQLConnection {
 
     switch (authType) {
       case this.AUTH_TYPES.OK:
-        this.socket.emit("authenticated");
+        this.socket?.emit("authenticated");
         break;
       case this.AUTH_TYPES.CLEARTEXT_PASSWORD:
-        this.socket.write(createPasswordPacket(this.password));
+        this.socket?.write(createPasswordPacket(this.password));
         break;
       case this.AUTH_TYPES.MD5_PASSWORD:
         this._handleMD5Authentication(authData);
@@ -235,15 +258,15 @@ class PostgreSQLConnection {
         this._handleSASLFinal(authData);
         break;
       default:
-        this.socket.emit(
+        this.socket?.emit(
           "authenticationError",
-          new Error(`Unsupported authentication type: ${authType}`)
+          new Error(`Unsupported authentication type: ${authType}`),
         );
         break;
     }
   }
 
-  _handleMD5Authentication(message) {
+  _handleMD5Authentication(message: Buffer) {
     const salt = message.slice(0, 4);
 
     const firstHash = crypto
@@ -256,10 +279,10 @@ class PostgreSQLConnection {
       .update(firstHash + salt.toString("hex"))
       .digest("hex");
 
-    this.socket.write(createPasswordPacket("md5" + secondHash));
+    this.socket?.write(createPasswordPacket("md5" + secondHash));
   }
 
-  _handleSASLAuthentication(message) {
+  _handleSASLAuthentication(message: Buffer<ArrayBufferLike>) {
     // Parse mechanisms list (null-terminated strings)
     const mechanisms = [];
     let offset = 0;
@@ -271,91 +294,94 @@ class PostgreSQLConnection {
 
     if (mechanisms.includes("SCRAM-SHA-256")) {
       this.scram = startSCRAMSHA256(this.scram, this.user);
-      this.socket.write(
+      this.socket?.write(
         createSASLInitialResponsePacket(
           "SCRAM-SHA-256",
-          this.scram.clientFirstMessage
-        )
+          this.scram.clientFirstMessage,
+        ),
       );
     } else {
       const error = new Error(
-        `No supported SASL mechanism. Available: ${mechanisms.join(", ")}`
+        `No supported SASL mechanism. Available: ${mechanisms.join(", ")}`,
       );
-      this.socket.emit("authenticationError", error);
+      this.socket?.emit("authenticationError", error);
     }
   }
 
-  _handleSASLContinue(message) {
+  _handleSASLContinue(message: any) {
     const { state, error } = processSASLContinue(
       this.scram,
       message,
-      this.password
+      this.password,
     );
     this.scram = state;
 
     if (error) {
-      this.socket.emit("authenticationError", error);
+      this.socket?.emit("authenticationError", error);
       return;
     }
 
     // Send client final message
-    this.socket.write(
-      createPasswordPacket(this.scram.clientFinalMessage, false)
+    this.socket?.write(
+      createPasswordPacket(this.scram.clientFinalMessage, false),
     );
   }
 
-  _handleSASLFinal(message) {
+  _handleSASLFinal(message: any) {
     const error = processSASLFinal(this.scram, message);
 
     if (error) {
-      this.socket.emit("authenticationError", error);
+      this.socket?.emit("authenticationError", error);
       return;
     }
 
-    this.socket.emit("authenticated");
+    this.socket?.emit("authenticated");
   }
 
-  _handleBackendKeyData(message) {
+  _handleBackendKeyData(message: {
+    length: number;
+    readInt32BE: (arg0: number) => number;
+  }) {
     if (message.length >= 8) {
       this.processId = message.readInt32BE(0);
       this.secretKey = message.readInt32BE(4);
-      this.socket.emit("authenticated");
+      this.socket?.emit("authenticated");
     }
   }
 
-  _handleReadyForQuery(message) {
+  _handleReadyForQuery(message: Buffer<ArrayBufferLike>) {
     const status = message.toString("utf8", 0, 1);
     this.readyForQuery = true;
-    this.socket.emit("readyForQuery", status);
+    this.socket?.emit("readyForQuery", status);
   }
 
   // --- Response and Error Handlers (uses messageParser.js) ---
 
-  _handleErrorResponse(message) {
+  _handleErrorResponse(message: Buffer<ArrayBufferLike>) {
     const fields = parseNullTerminatedPairs(message);
-    const error = new Error(fields.M || "PostgreSQL error");
+    const error: any = new Error(fields.M || "PostgreSQL error");
     error.fields = fields;
 
     if (this.currentQuery && this.currentQuery.reject) {
       this.currentQuery.reject(error);
       this.currentQuery = null;
     } else {
-      this.socket.emit("authenticationError", error);
-      this.socket.emit("error", error);
+      this.socket?.emit("authenticationError", error);
+      this.socket?.emit("error", error);
     }
   }
 
-  _handleNoticeResponse(message) {
+  _handleNoticeResponse(message: Buffer<ArrayBufferLike>) {
     const fields = parseNullTerminatedPairs(message);
     console.log("PostgreSQL notice:", fields);
   }
 
-  _handleParameterStatus(message) {
+  _handleParameterStatus(message: Buffer<ArrayBufferLike>) {
     const pairs = parseNullTerminatedPairs(message);
     console.log("Parameter status:", pairs);
   }
 
-  _handleQueryResponse(messageType, message) {
+  _handleQueryResponse(messageType: any, message: any) {
     if (!this.currentQuery || !this.currentQuery.handlers) return;
 
     const handlers = this.currentQuery.handlers;
@@ -381,7 +407,7 @@ class PostgreSQLConnection {
 
   // --- Query Method ---
 
-  async query(sql, params = []) {
+  async query(sql: any, params = []) {
     if (!this.readyForQuery) {
       throw new Error("Connection not ready for query");
     }
@@ -389,25 +415,37 @@ class PostgreSQLConnection {
     this.readyForQuery = false;
 
     return new Promise((resolve, reject) => {
-      const results = [];
-      let fields = null;
-      let commandCompleteMessage = null;
+      const results: any[] = [];
+      let fields:
+        | {
+            name: string;
+            tableOID: number;
+            columnAttrNum: number;
+            dataTypeOID: number;
+            dataTypeSize: number;
+            typeModifier: number;
+            format: number;
+          }[]
+        | null = null;
+      let commandCompleteMessage: Buffer<ArrayBufferLike> | null = null;
 
       const handlers = {
-        onRowDescription: (message) => (fields = parseRowDescription(message)),
-        onDataRow: (message) => results.push(parseDataRow(message, fields)),
-        onCommandComplete: (message) => (commandCompleteMessage = message),
+        onRowDescription: (message: Buffer<ArrayBufferLike>) =>
+          (fields = parseRowDescription(message)),
+        onDataRow: (message: Buffer<ArrayBufferLike>) =>
+          results.push(parseDataRow(message, fields)),
+        onCommandComplete: (message: any) => (commandCompleteMessage = message),
         onEmptyQueryResponse: () =>
           (commandCompleteMessage = Buffer.from("EMPTY\0", "utf8")),
         onNoData: () => {},
       };
 
       this.currentQuery = {
-        resolve: (data) => {
+        resolve: (data: unknown) => {
           this.currentQuery = null;
           resolve(data);
         },
-        reject: (error) => {
+        reject: (error: any) => {
           this.currentQuery = null;
           this.readyForQuery = true;
           reject(error);
@@ -423,23 +461,24 @@ class PostgreSQLConnection {
 
       const cleanup = () => {
         clearTimeout(timeout);
-        this.socket.removeListener("readyForQuery", onReadyForQuery);
-        this.socket.removeListener("error", onError);
+        this.socket?.removeListener("readyForQuery", onReadyForQuery);
+        this.socket?.removeListener("error", onError);
         this.currentQuery = null;
       };
 
       this._sendQuery(sql, params);
 
-      const onReadyForQuery = (status) => {
+      const onReadyForQuery = (status: string) => {
         if (!this.currentQuery) {
           cleanup();
           return;
         }
 
-        let parsedCommand = {
+        let parsedCommand: any = {
           command: "UNKNOWN",
           rowCount: 0,
           commandTag: "",
+          oid: null,
         };
 
         if (commandCompleteMessage) {
@@ -462,23 +501,23 @@ class PostgreSQLConnection {
         });
       };
 
-      const onError = (error) => {
+      const onError = (error: any) => {
         cleanup();
         reject(error);
       };
 
-      this.socket.once("readyForQuery", onReadyForQuery);
-      this.socket.once("error", onError);
+      this.socket?.once("readyForQuery", onReadyForQuery);
+      this.socket?.once("error", onError);
     });
   }
 
-  _sendQuery(sql, params) {
+  _sendQuery(sql: string, params: string | any[]) {
     if (params && params.length > 0) {
       console.warn(
-        "Extended query not fully implemented, falling back to simple query (without parameter safety)."
+        "Extended query not fully implemented, falling back to simple query (without parameter safety).",
       );
     }
-    this.socket.write(createSimpleQueryPacket(sql));
+    this.socket?.write(createSimpleQueryPacket(sql));
   }
 }
 
