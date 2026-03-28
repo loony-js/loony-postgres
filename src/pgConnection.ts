@@ -22,6 +22,7 @@ import {
   processSASLContinue,
   processSASLFinal,
 } from "./scramAuth";
+import type { QueryResult } from "./types";
 
 class PostgreSQLConnection {
   host: string;
@@ -407,7 +408,7 @@ class PostgreSQLConnection {
 
   // --- Query Method ---
 
-  async query(sql: any, params = []) {
+  async query(sql: string, params: string[] = []): Promise<QueryResult> {
     if (!this.readyForQuery) {
       throw new Error("Connection not ready for query");
     }
@@ -441,7 +442,7 @@ class PostgreSQLConnection {
       };
 
       this.currentQuery = {
-        resolve: (data: unknown) => {
+        resolve: (data: any) => {
           this.currentQuery = null;
           resolve(data);
         },
@@ -498,7 +499,7 @@ class PostgreSQLConnection {
           rowCount: parsedCommand.rowCount,
           commandTag: parsedCommand.commandTag,
           oid: parsedCommand.oid,
-        });
+        } as QueryResult);
       };
 
       const onError = (error: any) => {
